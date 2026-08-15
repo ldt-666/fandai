@@ -30,7 +30,7 @@ config.yaml
 .env.*
 
 # Claude Code machine-local settings
-.claude/settings.local.json
+.claude/
 
 # Local website/protocol investigation captures
 probe-body
