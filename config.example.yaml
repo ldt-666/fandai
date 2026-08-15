@@ -1,0 +1,16 @@
+version: 2
+
+adapters:
+  tasklet:
+    type: tasklet
+    api_url: "https://api.tasklet.ai/api/sendChatMessage"
+    token: "YOUR_TOKEN"
+
+models:
+  tasklet:
+    adapter: tasklet
+    agent_id: "YOUR_AGENT_ID"
+    workspace_id: "YOUR_WORKSPACE_ID"
+    timezone: "Asia/Singapore"
+    aliases:
+      - "tasklet"

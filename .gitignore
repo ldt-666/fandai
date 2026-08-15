@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Secrets — NEVER commit the real config.
+config.yaml
+.env
+.env.*
+
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# Local website/protocol investigation captures
+probe-body
+api-root.txt
+*-headers.txt
+assets-index.html
+manifest.json
+site.webmanifest
+app-manifest.webmanifest
+env.js
+version.json
+platform.js
+tasklet-platform.js
+app-redirect.js
+login.html
+new.html
+agents.html
+probe.html
+tasklet-home.html
+tasklet-robots.txt
+tasklet-sitemap.xml
+main.js
+tasklet-main.js
+
+# Build artifacts
+dist/
+build/
+*.egg
+
+# Local-only helper script used during initial scaffolding.
+clear_and_recreate.ps1
