@@ -28,6 +28,7 @@ htmlcov/
 config.yaml
 .env
 .env.*
+!.env.example
 
 # Claude Code machine-local settings
 .claude/

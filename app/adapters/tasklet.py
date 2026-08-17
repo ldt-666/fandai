@@ -64,7 +64,10 @@ class TaskletAdapter(Adapter):
             )
         except (OSError, WebSocketException, asyncio.TimeoutError) as exc:
             raise GatewayError(
-                f"Network error connecting to Tasklet sync: {exc}", code="network_error"
+                f"Network error connecting to Tasklet sync: {exc}",
+                code="network_error",
+                retryable_before_acceptance=True,
+                account_failure=True,
             ) from exc
 
         try:
@@ -78,16 +81,28 @@ class TaskletAdapter(Adapter):
                 {"type": "subscribeBlocks", "runId": route.agent_id, "pageSize": 500},
             )
             baseline = await _wait_for_initial_state(websocket, route.agent_id)
+        except (OSError, WebSocketException, asyncio.TimeoutError) as exc:
+            await websocket.close()
+            raise GatewayError(
+                f"Tasklet sync request failed: {exc}",
+                code="network_error",
+                retryable_before_acceptance=True,
+                account_failure=True,
+            ) from exc
+        except GatewayError as exc:
+            await websocket.close()
+            raise _mark_before_acceptance(exc) from exc
+
+        try:
             response = await self._client.post(self._api_url, headers=headers, json=payload)
         except (httpx.TimeoutException, httpx.HTTPError) as exc:
             await websocket.close()
-            raise GatewayError(f"Network error sending message to Tasklet: {exc}", code="network_error") from exc
-        except (OSError, WebSocketException, asyncio.TimeoutError) as exc:
-            await websocket.close()
-            raise GatewayError(f"Tasklet sync request failed: {exc}", code="network_error") from exc
-        except GatewayError:
-            await websocket.close()
-            raise
+            raise GatewayError(
+                f"Network error sending message to Tasklet: {exc}",
+                code="network_error",
+                account_failure=True,
+                acceptance_unknown=True,
+            ) from exc
 
         if response.status_code >= 400:
             body = (response.text or "")[:500]
@@ -98,13 +113,18 @@ class TaskletAdapter(Adapter):
                     "Tasklet authentication failed; check the configured token",
                     status_code=response.status_code,
                     code="authentication_error",
+                    retryable_before_acceptance=True,
+                    account_failure=True,
                 )
+            retryable = response.status_code == 429 or response.status_code >= 500
             raise GatewayError(
                 f"Tasklet returned HTTP {response.status_code}: {body.strip()}"
                 if body.strip()
                 else f"Tasklet returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 code="upstream_error",
+                retryable_before_acceptance=retryable,
+                account_failure=retryable,
             )
 
         try:
@@ -112,11 +132,21 @@ class TaskletAdapter(Adapter):
         except (ValueError, json.JSONDecodeError) as exc:
             await response.aclose()
             await websocket.close()
-            raise GatewayError("Tasklet returned malformed trigger JSON", code="malformed_upstream") from exc
+            raise GatewayError(
+                "Tasklet returned malformed trigger JSON",
+                code="malformed_upstream",
+                account_failure=True,
+                acceptance_unknown=True,
+            ) from exc
         await response.aclose()
         if not isinstance(result, dict) or result.get("agentId") != route.agent_id:
             await websocket.close()
-            raise GatewayError("Tasklet returned an unexpected agent id", code="malformed_upstream")
+            raise GatewayError(
+                "Tasklet returned an unexpected agent id",
+                code="malformed_upstream",
+                account_failure=True,
+                acceptance_unknown=True,
+            )
 
         accepted_at = time.time_ns() // 1_000_000
         logger.debug(
@@ -125,8 +155,9 @@ class TaskletAdapter(Adapter):
             accepted_at,
         )
         return AdapterStream(
-            response,
+            None,
             self._iter_sync(websocket, route.agent_id, baseline),
+            websocket.close,
         )
 
     async def _iter_sync(
@@ -291,9 +322,22 @@ def _block_is_current(block: dict[str, Any]) -> bool:
     return bool(block.get("blockId"))
 
 
+def _mark_before_acceptance(exc: GatewayError) -> GatewayError:
+    return GatewayError(
+        str(exc),
+        status_code=exc.status_code,
+        code=exc.code,
+        retryable_before_acceptance=True,
+        account_failure=True,
+    )
+
+
 def _sync_error(message: dict[str, Any]) -> GatewayError:
     code = str(message.get("code") or "upstream_error")
-    return GatewayError(str(message.get("error") or message.get("message") or "Tasklet sync failed"), code=code)
+    return GatewayError(
+        str(message.get("error") or message.get("message") or "Tasklet sync failed"),
+        code=code,
+    )
 
 
 def compile_tasklet_message(request: NormalizedRequest) -> str:

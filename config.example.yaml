@@ -1,16 +1,15 @@
 version: 2
 
-adapters:
-  tasklet:
-    type: tasklet
-    api_url: "https://api.tasklet.ai/api/sendChatMessage"
-    token: "YOUR_TOKEN"
-
-models:
-  tasklet:
-    adapter: tasklet
-    agent_id: "YOUR_AGENT_ID"
-    workspace_id: "YOUR_WORKSPACE_ID"
+# Multi-account mode. Requests use model "tasklet" and accounts are selected
+# round-robin. api_url and timezone are optional.
+accounts:
+  - name: "account1"
+    token: "YOUR_TOKEN_1"
+    agent_id: "YOUR_AGENT_ID_1"
+    workspace_id: "YOUR_WORKSPACE_ID_1"
+  - name: "account2"
+    token: "YOUR_TOKEN_2"
+    agent_id: "YOUR_AGENT_ID_2"
+    workspace_id: "YOUR_WORKSPACE_ID_2"
     timezone: "Asia/Singapore"
-    aliases:
-      - "tasklet"
+    # api_url: "https://api.tasklet.ai/api/sendChatMessage"

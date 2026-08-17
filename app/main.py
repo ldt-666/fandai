@@ -8,10 +8,11 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .adapters import GatewayError, NormalizedRequest
+from .auth import require_api_key
 from .config import GatewayConfig, build_adapters, load_config
 from .messages_adapter import message_body, messages_stream
 from .models import (
@@ -140,7 +141,7 @@ async def _collect(stream: AsyncIterator[str]) -> str:
     return "".join(parts)
 
 
-@app.post("/v1/chat/completions", response_model=None)
+@app.post("/v1/chat/completions", response_model=None, dependencies=[Depends(require_api_key)])
 async def chat_completions(body: ChatCompletionRequest, request: Request):
     try:
         normalized = normalize_chat(body)
@@ -154,7 +155,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         return _openai_error(exc)
 
 
-@app.post("/v1/responses", response_model=None)
+@app.post("/v1/responses", response_model=None, dependencies=[Depends(require_api_key)])
 async def responses(body: ResponsesRequest, request: Request):
     try:
         normalized = normalize_responses(body)
@@ -168,7 +169,7 @@ async def responses(body: ResponsesRequest, request: Request):
         return _openai_error(exc)
 
 
-@app.post("/v1/messages", response_model=None)
+@app.post("/v1/messages", response_model=None, dependencies=[Depends(require_api_key)])
 async def messages(body: AnthropicMessagesRequest, request: Request):
     try:
         normalized = normalize_messages(body)

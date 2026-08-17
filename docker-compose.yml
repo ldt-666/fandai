@@ -6,12 +6,17 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     ports:
-      - "8000:8000"
+      # Bind to loopback only. nginx (on the host) terminates TLS and reverse
+      # proxies to this port; the app is never exposed to the public internet.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       FANDAI_CONFIG: /app/config.yaml
       FANDAI_LOG_LEVEL: INFO
+      # Client API key for /v1/* endpoints. Read from the .env file (see
+      # .env.example). When empty, client authentication is disabled.
+      FANDAI_API_KEY: ${FANDAI_API_KEY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz').status == 200 else 1)"]
       interval: 30s

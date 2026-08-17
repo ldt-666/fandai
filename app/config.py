@@ -10,7 +10,8 @@ from typing import Any
 
 import yaml
 
-from .adapters import AdapterRoute, TaskletAdapter
+from .account_pool import AccountConfig, AccountManager, DEFAULT_TASKLET_API_URL
+from .adapters import Adapter, AdapterRoute, TaskletAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class GatewayConfig:
     models: dict[str, AdapterRoute]
     aliases: dict[str, AdapterRoute]
     legacy: bool = False
+    accounts: tuple[AccountConfig, ...] = ()
 
     def resolve_model(self, model: str) -> AdapterRoute:
         route = self.aliases.get(model)
@@ -55,6 +57,17 @@ def _redacted_tasklet(value: TaskletConfig) -> dict[str, Any]:
     }
 
 
+def _redacted_account(value: AccountConfig) -> dict[str, Any]:
+    return {
+        "name": value.name,
+        "api_url": value.api_url,
+        "token": "***",
+        "agent_id": value.agent_id,
+        "workspace_id": value.workspace_id,
+        "timezone": value.timezone,
+    }
+
+
 def _required(section: dict[str, Any], keys: tuple[str, ...], label: str) -> None:
     missing = [key for key in keys if not section.get(key)]
     if missing:
@@ -70,8 +83,58 @@ def load_config(path: Path | None = None) -> GatewayConfig:
     if not isinstance(data, dict):
         raise ValueError("Configuration root must be a mapping")
 
+    if "accounts" in data and any(key in data for key in ("tasklet", "adapters", "models")):
+        raise ValueError("Use accounts config by itself; do not mix it with tasklet or adapters/models")
     if "tasklet" in data and ("adapters" in data or "models" in data):
         raise ValueError("Use either legacy tasklet config or v2 adapters/models config, not both")
+
+    if "accounts" in data:
+        raw_accounts = data["accounts"]
+        if not isinstance(raw_accounts, list) or not raw_accounts:
+            raise ValueError("accounts configuration must be a non-empty list")
+        accounts: list[AccountConfig] = []
+        names: set[str] = set()
+        allowed_keys = {"name", "api_url", "token", "agent_id", "workspace_id", "timezone"}
+        for index, raw in enumerate(raw_accounts):
+            label = f"account {index + 1}"
+            if not isinstance(raw, dict):
+                raise ValueError(f"{label} must be a mapping")
+            unknown = set(raw) - allowed_keys
+            if unknown:
+                raise ValueError(f"Unknown {label} keys: {', '.join(sorted(unknown))}")
+            _required(raw, ("name", "token", "agent_id", "workspace_id"), label)
+            name = str(raw["name"])
+            if name in names:
+                raise ValueError(f"Duplicate account name: {name}")
+            names.add(name)
+            accounts.append(
+                AccountConfig(
+                    name=name,
+                    api_url=str(raw.get("api_url") or DEFAULT_TASKLET_API_URL),
+                    token=str(raw["token"]),
+                    agent_id=str(raw["agent_id"]),
+                    workspace_id=str(raw["workspace_id"]),
+                    timezone=str(raw.get("timezone") or "Asia/Singapore"),
+                )
+            )
+        route = AdapterRoute(
+            "tasklet",
+            "accounts",
+            "",
+            "",
+            "Asia/Singapore",
+        )
+        logger.info(
+            "Loaded account pool: %s",
+            [_redacted_account(account) for account in accounts],
+        )
+        return GatewayConfig(
+            {},
+            {"tasklet": route},
+            {"tasklet": route},
+            accounts=tuple(accounts),
+        )
+
     if "tasklet" in data:
         tasklet = data["tasklet"]
         if not isinstance(tasklet, dict):
@@ -82,10 +145,21 @@ def load_config(path: Path | None = None) -> GatewayConfig:
             agent_id=str(tasklet["agent_id"]), workspace_id=str(tasklet["workspace_id"]),
             timezone=str(tasklet.get("timezone") or "Asia/Singapore"),
         )
-        route = AdapterRoute("tasklet", "tasklet", adapter_cfg.agent_id, adapter_cfg.workspace_id, adapter_cfg.timezone, ("tasklet",))
+        route = AdapterRoute(
+            "tasklet",
+            "tasklet",
+            adapter_cfg.agent_id,
+            adapter_cfg.workspace_id,
+            adapter_cfg.timezone,
+        )
         logger.warning("Using legacy tasklet config; migrate to adapters/models v2 when convenient")
         logger.info("Loaded config: %s", {"tasklet": _redacted_tasklet(adapter_cfg)})
-        return GatewayConfig({"tasklet": adapter_cfg}, {"tasklet": route}, {"tasklet": route}, legacy=True)
+        return GatewayConfig(
+            {"tasklet": adapter_cfg},
+            {"tasklet": route},
+            {"tasklet": route},
+            legacy=True,
+        )
 
     if not isinstance(data.get("adapters"), dict) or not isinstance(data.get("models"), dict):
         raise ValueError("Configuration requires adapters: and models: sections")
@@ -115,7 +189,11 @@ def load_config(path: Path | None = None) -> GatewayConfig:
             aliases=tuple(str(alias) for alias in (raw.get("aliases") or [])),
         )
         models[name] = route
+        seen_aliases: set[str] = set()
         for alias in (name, *route.aliases):
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
             if alias in aliases:
                 raise ValueError(f"Duplicate model alias: {alias}")
             aliases[alias] = route
@@ -124,7 +202,9 @@ def load_config(path: Path | None = None) -> GatewayConfig:
     return GatewayConfig(adapters, models, aliases)
 
 
-def build_adapters(config: GatewayConfig, client) -> dict[str, TaskletAdapter]:
+def build_adapters(config: GatewayConfig, client) -> dict[str, Adapter]:
+    if config.accounts:
+        return {"accounts": AccountManager(client, config.accounts)}
     return {
         name: TaskletAdapter(client, api_url=adapter.api_url, token=adapter.token)
         for name, adapter in config.adapters.items()
