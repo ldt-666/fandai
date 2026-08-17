@@ -16,7 +16,6 @@ synchronized over an authenticated WebSocket. Tokens are stored only in
 ## Configuration
 
 The preferred configuration uses the in-process Tasklet account pool:
-
 ```yaml
 version: 2
 accounts:
@@ -50,6 +49,37 @@ web dashboard, or account-management API.
 `https://api.tasklet.ai/api/sendChatMessage`; `timezone` defaults to
 `Asia/Singapore`. Account names must be unique, and `accounts:` cannot be mixed
 with the single-account formats below.
+
+### Remote account pool
+
+Instead of listing accounts inline, the gateway can load them from a URL:
+
+```yaml
+version: 2
+accounts_source:
+  type: url
+  url: "https://tusi.catbye.com/fandai/fandai.json"
+  refresh_interval: 600
+```
+
+The remote document must be JSON of the form:
+
+```json
+{
+  "accounts": [
+    {"name": "account1", "token": "xxx", "agent_id": "xxx", "workspace_id": "xxx"}
+  ]
+}
+```
+
+At startup the gateway performs an HTTP GET and converts the `accounts` list
+into the same account structure the inline `accounts:` block produces. If the
+first fetch fails, startup fails. A background task then re-fetches every
+`refresh_interval` seconds (default 600); if a refresh fails, the previously
+loaded accounts keep serving and the failure is logged. In-flight requests are
+never disrupted by a refresh, and unchanged accounts keep their round-robin and
+cooldown state across refreshes. `accounts_source` cannot be combined with
+`accounts`, `tasklet`, or `adapters`/`models`.
 
 The existing v2 single-account configuration remains supported:
 

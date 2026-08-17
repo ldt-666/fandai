@@ -10,8 +10,9 @@ from typing import Any
 
 import yaml
 
-from .account_pool import AccountConfig, AccountManager, DEFAULT_TASKLET_API_URL
+from .account_pool import AccountConfig, AccountManager, DEFAULT_TASKLET_API_URL, parse_accounts
 from .adapters import Adapter, AdapterRoute, TaskletAdapter
+from .remote_accounts import AccountsSource, parse_accounts_source
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class GatewayConfig:
     aliases: dict[str, AdapterRoute]
     legacy: bool = False
     accounts: tuple[AccountConfig, ...] = ()
+    accounts_source: AccountsSource | None = None
 
     def resolve_model(self, model: str) -> AdapterRoute:
         route = self.aliases.get(model)
@@ -85,38 +87,26 @@ def load_config(path: Path | None = None) -> GatewayConfig:
 
     if "accounts" in data and any(key in data for key in ("tasklet", "adapters", "models")):
         raise ValueError("Use accounts config by itself; do not mix it with tasklet or adapters/models")
+    if "accounts_source" in data and any(
+        key in data for key in ("accounts", "tasklet", "adapters", "models")
+    ):
+        raise ValueError("Use accounts_source by itself; do not mix it with accounts, tasklet, or adapters/models")
     if "tasklet" in data and ("adapters" in data or "models" in data):
         raise ValueError("Use either legacy tasklet config or v2 adapters/models config, not both")
 
+    if "accounts_source" in data:
+        source = parse_accounts_source(data["accounts_source"])
+        route = AdapterRoute("tasklet", "accounts", "", "", "Asia/Singapore")
+        logger.info("Loaded remote accounts source: url=%s refresh_interval=%ds", source.url, source.refresh_interval)
+        return GatewayConfig(
+            {},
+            {"tasklet": route},
+            {"tasklet": route},
+            accounts_source=source,
+        )
+
     if "accounts" in data:
-        raw_accounts = data["accounts"]
-        if not isinstance(raw_accounts, list) or not raw_accounts:
-            raise ValueError("accounts configuration must be a non-empty list")
-        accounts: list[AccountConfig] = []
-        names: set[str] = set()
-        allowed_keys = {"name", "api_url", "token", "agent_id", "workspace_id", "timezone"}
-        for index, raw in enumerate(raw_accounts):
-            label = f"account {index + 1}"
-            if not isinstance(raw, dict):
-                raise ValueError(f"{label} must be a mapping")
-            unknown = set(raw) - allowed_keys
-            if unknown:
-                raise ValueError(f"Unknown {label} keys: {', '.join(sorted(unknown))}")
-            _required(raw, ("name", "token", "agent_id", "workspace_id"), label)
-            name = str(raw["name"])
-            if name in names:
-                raise ValueError(f"Duplicate account name: {name}")
-            names.add(name)
-            accounts.append(
-                AccountConfig(
-                    name=name,
-                    api_url=str(raw.get("api_url") or DEFAULT_TASKLET_API_URL),
-                    token=str(raw["token"]),
-                    agent_id=str(raw["agent_id"]),
-                    workspace_id=str(raw["workspace_id"]),
-                    timezone=str(raw.get("timezone") or "Asia/Singapore"),
-                )
-            )
+        accounts = parse_accounts(data["accounts"])
         route = AdapterRoute(
             "tasklet",
             "accounts",
@@ -132,7 +122,7 @@ def load_config(path: Path | None = None) -> GatewayConfig:
             {},
             {"tasklet": route},
             {"tasklet": route},
-            accounts=tuple(accounts),
+            accounts=accounts,
         )
 
     if "tasklet" in data:
@@ -209,3 +199,18 @@ def build_adapters(config: GatewayConfig, client) -> dict[str, Adapter]:
         name: TaskletAdapter(client, api_url=adapter.api_url, token=adapter.token)
         for name, adapter in config.adapters.items()
     }
+
+
+async def build_adapters_async(config: GatewayConfig, client):
+    """Async variant that also handles remote account sources.
+
+    Returns ``(adapters, loader)`` where ``loader`` is a RemoteAccountsLoader to
+    close on shutdown, or ``None`` when no remote source is configured.
+    """
+    if config.accounts_source is not None:
+        from .remote_accounts import RemoteAccountsLoader
+
+        loader = RemoteAccountsLoader(client, config.accounts_source)
+        manager = await loader.start()
+        return {"accounts": manager}, loader
+    return build_adapters(config, client), None

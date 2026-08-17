@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .adapters import GatewayError, NormalizedRequest
 from .auth import require_api_key
-from .config import GatewayConfig, build_adapters, load_config
+from .config import GatewayConfig, build_adapters_async, load_config
 from .messages_adapter import message_body, messages_stream
 from .models import (
     AnthropicMessagesRequest,
@@ -42,10 +42,14 @@ async def lifespan(app: FastAPI):
     )
     app.state.config = config
     app.state.http_client = client
-    app.state.adapters = build_adapters(config, client)
+    adapters, loader = await build_adapters_async(config, client)
+    app.state.adapters = adapters
+    app.state.accounts_loader = loader
     try:
         yield
     finally:
+        if loader is not None:
+            await loader.aclose()
         await client.aclose()
 
 

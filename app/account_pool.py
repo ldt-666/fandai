@@ -25,6 +25,47 @@ class AccountConfig:
     api_url: str = DEFAULT_TASKLET_API_URL
 
 
+_ACCOUNT_KEYS = {"name", "api_url", "token", "agent_id", "workspace_id", "timezone"}
+_REQUIRED_ACCOUNT_KEYS = ("name", "token", "agent_id", "workspace_id")
+
+
+def parse_accounts(raw_accounts: Any) -> tuple[AccountConfig, ...]:
+    """Validate and convert a list of account mappings into AccountConfig.
+
+    Shared by local ``config.yaml`` parsing and remote JSON loading so both
+    sources enforce identical rules and error messages.
+    """
+    if not isinstance(raw_accounts, list) or not raw_accounts:
+        raise ValueError("accounts configuration must be a non-empty list")
+    accounts: list[AccountConfig] = []
+    names: set[str] = set()
+    for index, raw in enumerate(raw_accounts):
+        label = f"account {index + 1}"
+        if not isinstance(raw, dict):
+            raise ValueError(f"{label} must be a mapping")
+        unknown = set(raw) - _ACCOUNT_KEYS
+        if unknown:
+            raise ValueError(f"Unknown {label} keys: {', '.join(sorted(unknown))}")
+        missing = [key for key in _REQUIRED_ACCOUNT_KEYS if not raw.get(key)]
+        if missing:
+            raise ValueError(f"Missing required {label} keys: {', '.join(missing)}")
+        name = str(raw["name"])
+        if name in names:
+            raise ValueError(f"Duplicate account name: {name}")
+        names.add(name)
+        accounts.append(
+            AccountConfig(
+                name=name,
+                api_url=str(raw.get("api_url") or DEFAULT_TASKLET_API_URL),
+                token=str(raw["token"]),
+                agent_id=str(raw["agent_id"]),
+                workspace_id=str(raw["workspace_id"]),
+                timezone=str(raw.get("timezone") or "Asia/Singapore"),
+            )
+        )
+    return tuple(accounts)
+
+
 @dataclass
 class _AccountSlot:
     config: AccountConfig
@@ -83,20 +124,40 @@ class AccountManager(Adapter):
         self._condition = asyncio.Condition()
         self._clock = clock
         self._cursor = 0
-        self._slots = [
-            _AccountSlot(
-                config=account,
-                adapter=adapter_factory(client, api_url=account.api_url, token=account.token),
-                route=AdapterRoute(
-                    name=account.name,
-                    adapter="accounts",
-                    agent_id=account.agent_id,
-                    workspace_id=account.workspace_id,
-                    timezone=account.timezone,
-                ),
-            )
-            for account in accounts
-        ]
+        self._client = client
+        self._adapter_factory = adapter_factory
+        self._slots = [self._build_slot(account) for account in accounts]
+
+    def _build_slot(self, account: AccountConfig) -> _AccountSlot:
+        return _AccountSlot(
+            config=account,
+            adapter=self._adapter_factory(
+                self._client, api_url=account.api_url, token=account.token
+            ),
+            route=AdapterRoute(
+                name=account.name,
+                adapter="accounts",
+                agent_id=account.agent_id,
+                workspace_id=account.workspace_id,
+                timezone=account.timezone,
+            ),
+        )
+
+    async def reload_accounts(self, accounts: tuple[AccountConfig, ...]) -> None:
+        """Replace the account roster, preserving runtime state for unchanged
+        accounts (matched by full config). New or changed accounts get a fresh
+        slot; removed accounts are dropped. In-flight leases keep their original
+        slot object, so a reload never disrupts a running request."""
+        if not accounts:
+            raise ValueError("reload requires at least one account")
+        async with self._condition:
+            existing = {slot.config: slot for slot in self._slots}
+            self._slots = [
+                existing[account] if account in existing else self._build_slot(account)
+                for account in accounts
+            ]
+            self._cursor = 0
+            self._condition.notify_all()
 
     async def open_stream(
         self,

@@ -1,5 +1,17 @@
 version: 2
 
+# Remote account pool. When accounts_source.url is set, the gateway fetches the
+# account list from that URL at startup (startup fails if the first fetch fails)
+# and refreshes it every refresh_interval seconds. If a later refresh fails, the
+# previously loaded accounts keep serving. The remote document must look like:
+#   {"accounts": [{"name": ..., "token": ..., "agent_id": ..., "workspace_id": ...}]}
+# accounts_source cannot be combined with accounts / tasklet / adapters / models.
+#
+# accounts_source:
+#   type: url
+#   url: "https://tusi.catbye.com/fandai/fandai.json"
+#   refresh_interval: 600
+
 # Multi-account mode. Requests use model "tasklet" and accounts are selected
 # round-robin. api_url and timezone are optional.
 accounts:
