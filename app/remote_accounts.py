@@ -61,7 +61,9 @@ def accounts_from_document(document: Any) -> tuple[AccountConfig, ...]:
 
 
 async def fetch_accounts(client: httpx.AsyncClient, url: str) -> tuple[AccountConfig, ...]:
-    response = await client.get(url)
+    # Send a browser-like User-Agent so WAFs that block default client agents
+    # (e.g. httpx) don't reject the request with 403.
+    response = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
     response.raise_for_status()
     return accounts_from_document(response.json())
 
